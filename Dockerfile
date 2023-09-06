@@ -1,5 +1,5 @@
 ARG TS_VERSION=2.11.2
-ARG CNPG_VERSION=14.9-debian
+ARG CNPG_VERSION=14.9-6
 
 FROM ghcr.io/cloudnative-pg/postgresql:$CNPG_VERSION
 ARG TS_VERSION
