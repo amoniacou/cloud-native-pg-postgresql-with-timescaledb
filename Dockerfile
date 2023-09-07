@@ -6,7 +6,10 @@ ARG TS_VERSION
 ENV TS_VERSION=${TS_VERSION}
 USER 0
 ARG TS_VERSION
-RUN set -ex \
+RUN --mount=type=cache,target=/var/cache/apt \
+  --mount=type=cache,target=${HOME}/.cache \
+  --mount=type=cache,target=/build \
+  set -ex \
   && mkdir -p /var/lib/apt/lists/partial \
   && apt-get update \
   && apt-get -y install \
@@ -49,8 +52,6 @@ RUN set -ex \
   postgresql-server-dev-${PG_MAJOR} \
   && apt-get clean -y \
   && rm -rf \
-  "${HOME}/.cache" \
-  /var/lib/apt/lists/* \
   /tmp/*               \
   /var/tmp/*
 
