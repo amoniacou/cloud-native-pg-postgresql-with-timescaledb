@@ -1,14 +1,19 @@
 ARG TS_VERSION=2.11.2
 ARG CNPG_VERSION=14.9-6
+ARG MAKEJ=2
 
 FROM ghcr.io/cloudnative-pg/postgresql:$CNPG_VERSION
 ARG TS_VERSION
 ENV TS_VERSION=${TS_VERSION}
+ARG MAKEJ
+ENV MAKEJ=${MAKEJ}
 USER 0
-ARG TS_VERSION
-RUN --mount=type=cache,target=/var/cache/apt \
-  --mount=type=cache,target=${HOME}/.cache \
-  --mount=type=cache,target=/build \
+RUN --mount=type=cache,sharing=locked,target=/var/cache/apt \
+  --mount=type=cache,target=/var/lib/apt,sharing=locked \
+  --mount=type=cache,sharing=locked,target=${HOME}/.cache \
+  --mount=type=tmpfs,target=/tmp \
+  --mount=type=tmpfs,target=/var/tmp \
+  --mount=type=tmpfs,target=/build \
   set -ex \
   && mkdir -p /var/lib/apt/lists/partial \
   && apt-get update \
@@ -33,7 +38,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
   && cd /build/timescaledb && rm -fr build \
   && git checkout ${TS_VERSION} \
   && ./bootstrap -DCMAKE_BUILD_TYPE=RelWithDebInfo -DREGRESS_CHECKS=OFF -DTAP_CHECKS=OFF -DGENERATE_DOWNGRADE_SCRIPT=ON -DWARNINGS_AS_ERRORS=OFF -DPROJECT_INSTALL_METHOD="docker-bitnami" \
-  && cd build && make install \
+  && cd build && make install -j${MAKEJ}\
   && cd ~ \
   \
   && apt-get autoremove --purge -y \
@@ -50,9 +55,6 @@ RUN --mount=type=cache,target=/var/cache/apt \
   cmake \
   wget \
   postgresql-server-dev-${PG_MAJOR} \
-  && apt-get clean -y \
-  && rm -rf \
-  /tmp/*               \
-  /var/tmp/*
+  && apt-get clean -y
 
 USER 26
