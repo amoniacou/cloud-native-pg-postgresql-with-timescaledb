@@ -1,5 +1,5 @@
 ARG TS_VERSION=2.14.2
-ARG CNPG_VERSION=14.12-11-bookworm
+ARG CNPG_VERSION=16.9-bookworm
 ARG MAKEJ=2
 
 FROM ghcr.io/cloudnative-pg/postgresql:$CNPG_VERSION
