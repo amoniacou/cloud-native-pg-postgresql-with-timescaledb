@@ -7,22 +7,22 @@ Built on top of the official `ghcr.io/cloudnative-pg/postgresql` images with mul
 ## Available images
 
 ```
-ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:<pg_version>-ts<ts_version>-standard-<variant>
+ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:<pg_version>-ts<ts_version>-standard-trixie
 ```
 
 **PostgreSQL versions:** 14, 15, 16, 17
-**Debian variants:** `standard-bookworm`, `standard-trixie`
+**Debian variant:** `standard-trixie`
 
-| PG Major | TimescaleDB Version | Notes |
-|----------|-------------------|-------|
-| 14 | 2.19.3 | Last TS release with PG 14 support |
-| 15 | 2.25.2 | Latest stable |
-| 16 | 2.25.2 | Latest stable |
-| 17 | 2.25.2 | Latest stable |
+| PG Major | TimescaleDB | Edition | Install method |
+|----------|------------|---------|----------------|
+| 14 | 2.19.3 | TSL (compiled from source) | Source |
+| 15 | 2.25.2 | Apache 2.0 (OSS package) | apt |
+| 16 | 2.25.2 | Apache 2.0 (OSS package) | apt |
+| 17 | 2.25.2 | Apache 2.0 (OSS package) | apt |
 
 Example:
 ```
-ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:17.6-ts2.25.2-standard-bookworm
+ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:17.9-ts2.25.2-standard-trixie
 ```
 
 ## Usage with CloudNativePG
@@ -34,7 +34,7 @@ metadata:
   name: my-cluster
 spec:
   instances: 3
-  imageName: ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:17.6-ts2.25.2-standard-bookworm
+  imageName: ghcr.io/amoniacou/cloud-native-pg-postgresql-with-timescaledb:17.9-ts2.25.2-standard-trixie
 
   postgresql:
     shared_preload_libraries:
@@ -49,16 +49,18 @@ CREATE EXTENSION timescaledb;
 
 ## How it works
 
-The [Dockerfile](Dockerfile) takes the official CNPG PostgreSQL image and compiles TimescaleDB from source.
+The [Dockerfile](Dockerfile) takes the official CNPG PostgreSQL image and installs TimescaleDB:
+- **PG 15+**: installs `timescaledb-2-oss` package from [Timescale's apt repository](https://packagecloud.io/timescale/timescaledb)
+- **PG 14**: compiles from source (last TS version with PG 14 support)
 
 Build arguments:
 
 | Argument | Default | Description |
 |---|---|---|
-| `PG_VERSION` | `17.6` | PostgreSQL version |
-| `DEB_VERSION` | `standard-bookworm` | Debian variant |
-| `TS_VERSION` | `2.25.2` | TimescaleDB version |
-| `MAKEJ` | `2` | Parallel compilation threads |
+| `PG_VERSION` | `17.9` | PostgreSQL version |
+| `DEB_VERSION` | `standard-trixie` | Debian variant |
+| `TS_VERSION` | `2.25.2` | TimescaleDB version (used for PG 14 source build) |
+| `MAKEJ` | `2` | Parallel compilation threads (PG 14 only) |
 
 ## Auto-updates
 
@@ -72,9 +74,8 @@ You can also trigger the check manually via the "Run workflow" button in GitHub 
 
 ```bash
 docker buildx build \
-  --build-arg PG_VERSION=17.6 \
-  --build-arg DEB_VERSION=standard-bookworm \
-  --build-arg TS_VERSION=2.25.2 \
+  --build-arg PG_VERSION=17.9 \
+  --build-arg DEB_VERSION=standard-trixie \
   --platform linux/amd64 \
   -t my-pg-with-ts:local \
   .

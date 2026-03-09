@@ -95,7 +95,7 @@ jobs:
           fi
 
           # Filter upstream tags: match XX.Y-standard-variant (no date suffix)
-          # Only keep the 3 latest minor versions per major per variant
+          # Only keep the latest minor version per major per variant
           MATRIX_JSON="[]"
           for major in ${{ env.PG_MAJORS }}; do
             TS_VERSION="${TS_MAP[$major]}"
@@ -104,10 +104,10 @@ jobs:
               continue
             fi
 
-            for variant in bookworm trixie; do
+            for variant in trixie; do
               LATEST_TAGS=$(echo "$UPSTREAM_TAGS" \
                 | grep -E "^${major}\.[0-9]+-standard-${variant}$" \
-                | sort -V | tail -3 || true)
+                | sort -V | tail -1 || true)
 
               while IFS= read -r tag; do
                 [ -z "$tag" ] && continue
