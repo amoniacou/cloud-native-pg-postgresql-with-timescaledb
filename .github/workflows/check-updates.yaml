@@ -1,0 +1,212 @@
+name: Check for new CNPG PostgreSQL versions and build
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      force_rebuild:
+        description: "Force rebuild all tracked images"
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: amoniacou/cloud-native-pg-postgresql-with-timescaledb
+  UPSTREAM_IMAGE: cloudnative-pg/postgresql
+  PG_MAJORS: "14 15 16 17"
+  # TimescaleDB version per PG major (PG 14 dropped in TS 2.20+)
+  TS_VERSIONS_MAP: "14=2.19.3 15=2.25.2 16=2.25.2 17=2.25.2"
+
+jobs:
+  discover-versions:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.find-missing.outputs.matrix }}
+      has_updates: ${{ steps.find-missing.outputs.has_updates }}
+    steps:
+      - name: Discover new upstream versions
+        id: find-missing
+        run: |
+          set -euo pipefail
+
+          # Parse TS_VERSIONS_MAP into associative array
+          declare -A TS_MAP
+          for entry in ${{ env.TS_VERSIONS_MAP }}; do
+            key="${entry%%=*}"
+            value="${entry#*=}"
+            TS_MAP[$key]=$value
+          done
+
+          # Get anonymous token for GHCR
+          get_ghcr_token() {
+            local image=$1
+            curl -s "https://ghcr.io/token?scope=repository:${image}:pull" | jq -r '.token'
+          }
+
+          # List all tags for a GHCR image (with pagination)
+          list_tags() {
+            local image=$1
+            local token=$2
+            local url="https://ghcr.io/v2/${image}/tags/list?n=10000"
+            local all_tags=""
+
+            while [ -n "$url" ]; do
+              response=$(curl -s -D /tmp/headers -H "Authorization: Bearer ${token}" "$url")
+              tags=$(echo "$response" | jq -r '.tags[]? // empty')
+              all_tags="${all_tags}${tags}"$'\n'
+
+              # Handle pagination via Link header
+              next_path=$(grep -i '^link:' /tmp/headers 2>/dev/null \
+                | sed -n 's/.*<\(.*\)>; *rel="next".*/\1/p' \
+                | tr -d '\r' || true)
+              if [ -n "$next_path" ]; then
+                url="https://ghcr.io${next_path}"
+              else
+                url=""
+              fi
+            done
+
+            echo "$all_tags" | sort -u | grep -v '^$'
+          }
+
+          echo "Fetching upstream tags..."
+          UPSTREAM_TOKEN=$(get_ghcr_token "${{ env.UPSTREAM_IMAGE }}")
+          UPSTREAM_TAGS=$(list_tags "${{ env.UPSTREAM_IMAGE }}" "$UPSTREAM_TOKEN")
+
+          # On Mondays or force_rebuild: rebuild all tracked images for security updates
+          # Other days: only build missing images
+          DAY_OF_WEEK=$(date +%u)
+          FORCE_REBUILD="${{ inputs.force_rebuild }}"
+          if [ "$DAY_OF_WEEK" = "1" ] || [ "$FORCE_REBUILD" = "true" ]; then
+            echo "Rebuild mode: rebuilding all tracked images"
+            REBUILD_ALL=true
+          else
+            echo "Normal mode: building only missing images"
+            REBUILD_ALL=false
+          fi
+
+          if [ "$REBUILD_ALL" = "false" ]; then
+            echo "Fetching our tags..."
+            OUR_TOKEN=$(get_ghcr_token "${{ env.IMAGE_NAME }}")
+            OUR_TAGS=$(list_tags "${{ env.IMAGE_NAME }}" "$OUR_TOKEN" || echo "")
+          else
+            OUR_TAGS=""
+          fi
+
+          # Filter upstream tags: match XX.Y-standard-variant (no date suffix)
+          # Only keep the 3 latest minor versions per major per variant
+          MATRIX_JSON="[]"
+          for major in ${{ env.PG_MAJORS }}; do
+            TS_VERSION="${TS_MAP[$major]}"
+            if [ -z "$TS_VERSION" ]; then
+              echo "WARNING: No TS version mapped for PG $major, skipping"
+              continue
+            fi
+
+            for variant in bookworm trixie; do
+              LATEST_TAGS=$(echo "$UPSTREAM_TAGS" \
+                | grep -E "^${major}\.[0-9]+-standard-${variant}$" \
+                | sort -V | tail -3 || true)
+
+              while IFS= read -r tag; do
+                [ -z "$tag" ] && continue
+
+                pg_version=$(echo "$tag" | sed 's/-standard-.*//')
+                deb_version="standard-${variant}"
+                our_tag="${pg_version}-ts${TS_VERSION}-${deb_version}"
+
+                if [ "$REBUILD_ALL" = "false" ] && echo "$OUR_TAGS" | grep -qx "$our_tag"; then
+                  echo "Already exists: $our_tag"
+                  continue
+                fi
+
+                echo "Will build: pg_version=$pg_version deb_version=$deb_version ts_version=$TS_VERSION"
+                MATRIX_JSON=$(echo "$MATRIX_JSON" | jq -c \
+                  --arg pv "$pg_version" --arg dv "$deb_version" --arg tv "$TS_VERSION" \
+                  '. + [{"pg_version": $pv, "deb_version": $dv, "ts_version": $tv}]')
+              done <<< "$LATEST_TAGS"
+            done
+          done
+
+          echo "Matrix: $MATRIX_JSON"
+          COUNT=$(echo "$MATRIX_JSON" | jq 'length')
+
+          if [ "$COUNT" -gt 0 ]; then
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_updates=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "matrix={\"include\":$MATRIX_JSON}" >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    needs: discover-versions
+    if: needs.discover-versions.outputs.has_updates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix: ${{ fromJson(needs.discover-versions.outputs.matrix) }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ matrix.pg_version }}-ts${{ matrix.ts_version }}-${{ matrix.deb_version }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          provenance: false
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            PG_VERSION=${{ matrix.pg_version }}
+            DEB_VERSION=${{ matrix.deb_version }}
+            TS_VERSION=${{ matrix.ts_version }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  trivy-scan:
+    needs: [discover-versions, build-and-push]
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+    strategy:
+      matrix: ${{ fromJson(needs.discover-versions.outputs.matrix) }}
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ghcr.io/${{ env.IMAGE_NAME }}:${{ matrix.pg_version }}-ts${{ matrix.ts_version }}-${{ matrix.deb_version }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+
+      - name: Upload Trivy scan results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
