@@ -175,7 +175,7 @@ jobs:
             type=raw,value=${{ matrix.pg_version }}-ts${{ matrix.ts_version }}-${{ matrix.deb_version }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
