@@ -9,6 +9,14 @@ on:
         description: "Force rebuild all tracked images"
         type: boolean
         default: false
+      ts_version:
+        description: "Build a specific TimescaleDB version (e.g. 2.19.3). Requires cnpg_version."
+        type: string
+        default: ""
+      cnpg_version:
+        description: "Build a specific CNPG base image tag (e.g. 17.9-standard-trixie). Requires ts_version."
+        type: string
+        default: ""
 
 env:
   REGISTRY: ghcr.io
@@ -29,6 +37,21 @@ jobs:
         id: find-missing
         run: |
           set -euo pipefail
+
+          # If specific versions are provided, skip discovery and build only those
+          INPUT_TS="${{ inputs.ts_version }}"
+          INPUT_CNPG="${{ inputs.cnpg_version }}"
+          if [ -n "$INPUT_TS" ] && [ -n "$INPUT_CNPG" ]; then
+            pg_version=$(echo "$INPUT_CNPG" | sed 's/-standard-.*//')
+            deb_version=$(echo "$INPUT_CNPG" | sed 's/^[0-9.]*-//')
+            MATRIX_JSON=$(jq -nc \
+              --arg pv "$pg_version" --arg dv "$deb_version" --arg tv "$INPUT_TS" \
+              '[{"pg_version": $pv, "deb_version": $dv, "ts_version": $tv}]')
+            echo "Manual build: pg_version=$pg_version deb_version=$deb_version ts_version=$INPUT_TS"
+            echo "has_updates=true" >> "$GITHUB_OUTPUT"
+            echo "matrix={\"include\":$MATRIX_JSON}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
           # Parse TS_VERSIONS_MAP into associative array
           declare -A TS_MAP
@@ -184,8 +207,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           build-args: |
-            PG_VERSION=${{ matrix.pg_version }}
-            DEB_VERSION=${{ matrix.deb_version }}
+            CNPG_VERSION=${{ matrix.pg_version }}-${{ matrix.deb_version }}
             TS_VERSION=${{ matrix.ts_version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
